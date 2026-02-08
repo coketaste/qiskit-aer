@@ -22,10 +22,11 @@ namespace QV {
 namespace Chunk {
 
 template <typename data_t, typename kernel_t>
-__global__ void dev_apply_function(kernel_t func, uint_t count) {
+__global__ void dev_apply_function(kernel_t func, uint_t count,
+                                   uint_t offset = 0) {
   uint_t i;
 
-  i = blockIdx.x * blockDim.x + threadIdx.x;
+  i = offset + blockIdx.x * blockDim.x + threadIdx.x;
   if (i < count) {
     if (func.check_conditional(i))
       func(i);
@@ -33,12 +34,13 @@ __global__ void dev_apply_function(kernel_t func, uint_t count) {
 }
 
 template <typename data_t, typename kernel_t>
-__global__ void dev_apply_function_with_cache(kernel_t func, uint_t count) {
+__global__ void dev_apply_function_with_cache(kernel_t func, uint_t count,
+                                             uint_t offset = 0) {
   // One cache entry per thread.
   __shared__ thrust::complex<data_t> cache[_MAX_THD];
   uint_t i, idx;
 
-  i = blockIdx.x * blockDim.x + threadIdx.x;
+  i = offset + blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= count)
     return;
 
@@ -55,14 +57,17 @@ __global__ void dev_apply_function_with_cache(kernel_t func, uint_t count) {
 
 template <typename data_t, typename kernel_t>
 __global__ void dev_apply_function_sum(double *pReduceBuffer, kernel_t func,
-                                       uint_t buf_size, uint_t count) {
+                                       uint_t buf_size, uint_t count,
+                                       uint_t offset = 0,
+                                       uint_t buffer_base = 0) {
   // One cache entry per warp/wavefront
   __shared__ double cache[_MAX_THD / _WS];
   double sum;
   uint_t i, j, iChunk, nw;
 
   iChunk = blockIdx.y + blockIdx.z * gridDim.y;
-  i = threadIdx.x + blockIdx.x * blockDim.x + iChunk * gridDim.x * blockDim.x;
+  i = offset + threadIdx.x + blockIdx.x * blockDim.x +
+      iChunk * gridDim.x * blockDim.x;
   if (i >= count)
     return;
 
@@ -97,14 +102,15 @@ __global__ void dev_apply_function_sum(double *pReduceBuffer, kernel_t func,
     }
   }
   if (threadIdx.x == 0) {
-    pReduceBuffer[blockIdx.x + buf_size * iChunk] = sum;
+    pReduceBuffer[buffer_base + blockIdx.x + buf_size * iChunk] = sum;
   }
 }
 
 template <typename data_t, typename kernel_t>
 __global__ void
 dev_apply_function_sum_with_cache(double *pReduceBuffer, kernel_t func,
-                                  uint_t buf_size, uint_t count) {
+                                  uint_t buf_size, uint_t count,
+                                  uint_t offset = 0, uint_t buffer_base = 0) {
   // One cache entry per thread.
   __shared__ thrust::complex<data_t> cache[_MAX_THD];
   uint_t i, idx;
@@ -112,7 +118,8 @@ dev_apply_function_sum_with_cache(double *pReduceBuffer, kernel_t func,
   double sum;
 
   iChunk = blockIdx.y + blockIdx.z * gridDim.y;
-  i = threadIdx.x + blockIdx.x * blockDim.x + iChunk * gridDim.x * blockDim.x;
+  i = offset + threadIdx.x + blockIdx.x * blockDim.x +
+      iChunk * gridDim.x * blockDim.x;
   if (i >= count)
     return;
 
@@ -153,7 +160,7 @@ dev_apply_function_sum_with_cache(double *pReduceBuffer, kernel_t func,
     }
   }
   if (threadIdx.x == 0) {
-    pReduceBuffer[blockIdx.x + buf_size * iChunk] = sum;
+    pReduceBuffer[buffer_base + blockIdx.x + buf_size * iChunk] = sum;
   }
 }
 

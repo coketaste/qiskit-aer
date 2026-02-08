@@ -47,6 +47,8 @@ DISABLE_WARNING_POP
 #define AER_DUMMY_BUFFERS 4 // reserved storage for parameters
 
 #define QV_CUDA_NUM_THREADS 1024
+/* HIP/CUDA limit: gridDim.x * blockDim.x must be < 2^32. Cap blocks per launch. */
+#define QV_MAX_GRID_X ((1u << 22) - 1u)  /* 4194303; 4194303*1024 < 2^32 */
 #define QV_MAX_REGISTERS 10
 #define QV_MAX_BLOCKED_GATES 64
 
@@ -435,8 +437,14 @@ void ChunkContainer<data_t>::Execute(Function func, uint_t iChunk,
           nb = (nt + QV_CUDA_NUM_THREADS - 1) / QV_CUDA_NUM_THREADS;
           nt = QV_CUDA_NUM_THREADS;
         }
-        dev_apply_function_with_cache<data_t, Function>
-            <<<nb, nt, 0, strm>>>(func, ntotal);
+        for (uint_t offset = 0; offset < ntotal;) {
+          uint_t nb_this = (ntotal - offset + nt - 1) / nt;
+          if (nb_this > QV_MAX_GRID_X)
+            nb_this = QV_MAX_GRID_X;
+          dev_apply_function_with_cache<data_t, Function>
+              <<<nb_this, nt, 0, strm>>>(func, ntotal, offset);
+          offset += nb_this * nt;
+        }
       }
     } else {
       nt = count * func.size(chunk_bits_);
@@ -447,7 +455,14 @@ void ChunkContainer<data_t>::Execute(Function func, uint_t iChunk,
           nb = (nt + QV_CUDA_NUM_THREADS - 1) / QV_CUDA_NUM_THREADS;
           nt = QV_CUDA_NUM_THREADS;
         }
-        dev_apply_function<data_t, Function><<<nb, nt, 0, strm>>>(func, ntotal);
+        for (uint_t offset = 0; offset < ntotal;) {
+          uint_t nb_this = (ntotal - offset + nt - 1) / nt;
+          if (nb_this > QV_MAX_GRID_X)
+            nb_this = QV_MAX_GRID_X;
+          dev_apply_function<data_t, Function><<<nb_this, nt, 0, strm>>>(
+              func, ntotal, offset);
+          offset += nb_this * nt;
+        }
       }
     }
     cudaError_t err = cudaGetLastError();
@@ -512,8 +527,17 @@ void ChunkContainer<data_t>::ExecuteSum(double *pSum, Function func,
             nb = (nt + QV_CUDA_NUM_THREADS - 1) / QV_CUDA_NUM_THREADS;
             nt = QV_CUDA_NUM_THREADS;
           }
-          dev_apply_function_sum_with_cache<data_t, Function>
-              <<<nb, nt, 0, strm>>>(buf, func, buf_size, ntotal);
+          uint_t buffer_base = 0;
+          for (uint_t offset = 0; offset < ntotal;) {
+            uint_t nb_this = (ntotal - offset + nt - 1) / nt;
+            if (nb_this > QV_MAX_GRID_X)
+              nb_this = QV_MAX_GRID_X;
+            dev_apply_function_sum_with_cache<data_t, Function>
+                <<<nb_this, nt, 0, strm>>>(buf, func, buf_size, ntotal, offset,
+                                           buffer_base);
+            offset += nb_this * nt;
+            buffer_base += nb_this;
+          }
         }
       } else {
         nt = size;
@@ -523,8 +547,17 @@ void ChunkContainer<data_t>::ExecuteSum(double *pSum, Function func,
             nb = (nt + QV_CUDA_NUM_THREADS - 1) / QV_CUDA_NUM_THREADS;
             nt = QV_CUDA_NUM_THREADS;
           }
-          dev_apply_function_sum<data_t, Function>
-              <<<nb, nt, 0, strm>>>(buf, func, buf_size, ntotal);
+          uint_t buffer_base = 0;
+          for (uint_t offset = 0; offset < ntotal;) {
+            uint_t nb_this = (ntotal - offset + nt - 1) / nt;
+            if (nb_this > QV_MAX_GRID_X)
+              nb_this = QV_MAX_GRID_X;
+            dev_apply_function_sum<data_t, Function>
+                <<<nb_this, nt, 0, strm>>>(buf, func, buf_size, ntotal, offset,
+                                           buffer_base);
+            offset += nb_this * nt;
+            buffer_base += nb_this;
+          }
         }
       }
       cudaError_t err = cudaGetLastError();

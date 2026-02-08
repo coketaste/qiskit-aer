@@ -174,13 +174,14 @@ def show_system_info(precision='complex128'):
         return False, None, None
 
 
-def get_circuit_specs(qubits, precision='complex128'):
+def get_circuit_specs(qubits, precision='complex128', blocking_qubits=27):
     """
     Get circuit specifications including memory requirements.
     
     Args:
         qubits: Number of qubits
         precision: 'complex128' or 'complex64'
+        blocking_qubits: When blocking is enabled, qubits per chunk (default 27, ~2GB)
     
     Returns:
         dict: Circuit specifications
@@ -207,7 +208,6 @@ def get_circuit_specs(qubits, precision='complex128'):
     # Blocking info (for GPU)
     blocking_enabled = qubits >= 32
     if blocking_enabled:
-        blocking_qubits = 27
         chunk_size_bytes = (2 ** blocking_qubits) * bytes_per_element
         num_chunks = 2 ** (qubits - blocking_qubits)
     else:
@@ -227,7 +227,7 @@ def get_circuit_specs(qubits, precision='complex128'):
     }
 
 
-def run_benchmark(device, qubits, shots=100, precision='complex128'):
+def run_benchmark(device, qubits, shots=100, precision='complex128', blocking_qubits=27):
     """
     Run benchmark on specified device.
     
@@ -236,6 +236,7 @@ def run_benchmark(device, qubits, shots=100, precision='complex128'):
         qubits: Number of qubits
         shots: Number of measurement shots
         precision: 'complex128' or 'complex64'
+        blocking_qubits: When blocking is enabled (≥32 qubits), qubits per chunk (default 27)
     
     Returns:
         tuple: (time, result, error, circuit_specs)
@@ -256,7 +257,7 @@ def run_benchmark(device, qubits, shots=100, precision='complex128'):
         circuit.measure_all()
         
         # Get circuit specs
-        specs = get_circuit_specs(qubits, precision)
+        specs = get_circuit_specs(qubits, precision, blocking_qubits)
         
         # Configure run options
         run_options = {'shots': shots, 'seed_simulator': 42}
@@ -264,7 +265,7 @@ def run_benchmark(device, qubits, shots=100, precision='complex128'):
         # Enable blocking for large circuits
         if device == 'GPU' and qubits >= 32:
             run_options['blocking_enable'] = True
-            run_options['blocking_qubits'] = 27  # NVIDIA standard
+            run_options['blocking_qubits'] = blocking_qubits
         
         # Execute
         start = time.time()
@@ -288,7 +289,7 @@ def run_benchmark(device, qubits, shots=100, precision='complex128'):
         return None, None, error_msg, None
 
 
-def print_circuit_preview(qubits_list, precision='complex128'):
+def print_circuit_preview(qubits_list, precision='complex128', blocking_qubits=27):
     """Print preview of circuits to be tested"""
     print("\n" + "="*90)
     print("CIRCUIT SPECIFICATIONS PREVIEW")
@@ -297,7 +298,7 @@ def print_circuit_preview(qubits_list, precision='complex128'):
     print("-"*90)
     
     for qubits in qubits_list[:10]:  # Limit to first 10 to avoid clutter
-        specs = get_circuit_specs(qubits, precision)
+        specs = get_circuit_specs(qubits, precision, blocking_qubits)
         blocking_info = f"{specs['num_chunks']} chunks" if specs['blocking_enabled'] else "No"
         print(f"{qubits:<8} {specs['depth']:<8} {specs['total_gates']:<8} "
               f"{specs['state_vector_gb']:>10.2f} GB {specs['total_memory_gb']:>10.2f} GB {blocking_info:<15}")
@@ -308,10 +309,10 @@ def print_circuit_preview(qubits_list, precision='complex128'):
     print()
 
 
-def run_comparison(qubits_list, shots=100, precision='complex128', max_qubits=None):
+def run_comparison(qubits_list, shots=100, precision='complex128', max_qubits=None, blocking_qubits=27):
     """Run CPU vs GPU comparison with detailed circuit info"""
     # Show circuit preview first
-    print_circuit_preview(qubits_list, precision)
+    print_circuit_preview(qubits_list, precision, blocking_qubits)
     
     print(f"Running benchmarks ({precision}, {shots} shots)...")
     print()
@@ -329,14 +330,14 @@ def run_comparison(qubits_list, shots=100, precision='complex128', max_qubits=No
             continue
         
         # Get circuit specs
-        specs = get_circuit_specs(qubits, precision)
+        specs = get_circuit_specs(qubits, precision, blocking_qubits)
         depth = specs['depth']
         gates = specs['total_gates']
         mem_str = f"{specs['state_vector_gb']:.2f} GB"
         
         # Skip CPU for large circuits
         if qubits > 30:
-            gpu_time, _, gpu_error, _ = run_benchmark('GPU', qubits, shots, precision)
+            gpu_time, _, gpu_error, _ = run_benchmark('GPU', qubits, shots, precision, blocking_qubits)
             
             if gpu_error:
                 print(f"{qubits:<8} {depth:<8} {gates:<8} {'Skip':<12} {'Failed':<12} {'-':<12} {mem_str:<12} ❌ {gpu_error[:20]}")
@@ -351,11 +352,11 @@ def run_comparison(qubits_list, shots=100, precision='complex128', max_qubits=No
             })
         else:
             # Run both CPU and GPU
-            cpu_time, _, cpu_error, _ = run_benchmark('CPU', qubits, shots, precision)
+            cpu_time, _, cpu_error, _ = run_benchmark('CPU', qubits, shots, precision, blocking_qubits)
             if cpu_error:
                 continue
             
-            gpu_time, _, gpu_error, _ = run_benchmark('GPU', qubits, shots, precision)
+            gpu_time, _, gpu_error, _ = run_benchmark('GPU', qubits, shots, precision, blocking_qubits)
             if gpu_error:
                 print(f"{qubits:<8} {depth:<8} {gates:<8} {cpu_time:<12.4f} {'Failed':<12} {'-':<12} {mem_str:<12} ❌")
                 continue
@@ -475,6 +476,9 @@ Examples:
   
   # Combination
   python3 benchmark.py --precision complex64 --qubits 25,30,33,35 --shots 1024
+  
+  # Custom blocking chunk size (for ≥32 qubits)
+  python3 benchmark.py --blocking-qubits 26
         """
     )
     
@@ -487,6 +491,9 @@ Examples:
     
     parser.add_argument('--shots', type=int, default=100,
                         help='Number of measurement shots (default: 100)')
+    
+    parser.add_argument('--blocking-qubits', type=int, default=27, metavar='N',
+                        help='When blocking is enabled (≥32 qubits), qubits per chunk (default: 27, ~2GB per chunk)')
     
     args = parser.parse_args()
     
@@ -537,7 +544,7 @@ Examples:
     print()
     
     # Run benchmarks
-    results = run_comparison(qubits_list, args.shots, args.precision, max_qubits)
+    results = run_comparison(qubits_list, args.shots, args.precision, max_qubits, args.blocking_qubits)
     
     # Print summary
     print_summary(results, args.precision)
